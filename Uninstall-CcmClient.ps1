@@ -1,41 +1,43 @@
-﻿#https://www.optimizationcore.com/deployment/sccm-client-complete-remove-uninstall-powershell-script/
+﻿#Requires -RunAsAdministrator
+
+FUNCTION Update-Registry($path) {
+    If(Test-Path $path) {write-verbose "$(Get-Date -Format g): Deleting $($path)"; Remove-Item -Path $path -Force -Recurse -Confirm:$false -Verbose}
+    }
+
+
+#https://www.optimizationcore.com/deployment/sccm-client-complete-remove-uninstall-powershell-script/
 FUNCTION Uninstall-CcmClient{
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$False,
-                       HelpMessage="Completely remove CCM client")]
-                       [switch]$RemoveAll
+        [Parameter(Mandatory=$false)]
+        [switch]$RemoveAll
                    )
-    BEGIN {
-        Write-Verbose "$(Get-Date -Format g): Beginning BEGIN block. RemoveAll parameter is set to $($RemoveAll)"
-        Write-Verbose "$(Get-Date -Format g): Ending BEGIN block. RemoveAll parameter is set to $($RemoveAll)" 
-    } #END BEGIN
-    PROCESS {
-        Write-Verbose "$(Get-Date -Format g): Beginning PROCESS block."
+        Write-Verbose "$(Get-Date -Format g): Beginning Uninstall-CCMClient function."
         Try {
             If(Test-Path "$($env:windir)\ccmsetup\ccmsetup.exe" -PathType Leaf){
-                $uninstall = "& `"$($env:windir)\ccmsetup\ccmsetup.exe`" /uninstall"
+                $uninstall = "$($env:windir)\ccmsetup\ccmsetup.exe" 
+                $switches = "/uninstall"
                 $launchLog = "& `"$($PSScriptRoot)\cmtrace.exe`" `"$($env:windir)\ccmsetup\logs\ccmsetup.log`""
-                $process = "ccmsetup"  
             } ElseIf(Test-path "$($PSScriptRoot)\ccmclean.exe" -PathType Leaf) {  
-                $uninstall = "& `"$($PSScriptRoot)\ccmclean.exe`" /logdir:`"$($env:windir)\temp`" /removehistory /q"
+                $uninstall = "$($PSScriptRoot)\ccmclean.exe"
+                $switches =  "/logdir:`"$($env:windir)\temp`" /removehistory /q"
                 $launchLog = "& `"$($PSScriptRoot)\cmtrace.exe`" `"$($env:windir)\temp\ccmclean.log`""
-                $process = "ccmclean"
             } Else {
                 #handle no removal code present
                 Write-Verbose "$(Get-Date -Format g): Unable to locate neither $($env:windir)\ccmsetup\ccmsetup.exe nor $($PSScriptRoot)\ccmclean.exe." 
                 Write-Verbose "$(Get-Date -Format g): Unable to uninstall CCM client. Script exiting."
             }
 
-            Write-Verbose "$(Get-Date -Format g): Invoking uninstall: $($uninstall)"
-            Invoke-Expression $uninstall -ErrorAction Stop
+            Write-Verbose "Running $returnValue = Start-Process -FilePath $($uninstall) -ArgumentList $($switches)  -NoNewWindow -Wait -Passthru"
+            $returnValue = Start-Process -FilePath $uninstall -ArgumentList $switches  -NoNewWindow -Wait -Passthru
+            Write-Verbose "Exitcode is $($returnValue.ExitCode)"
 
-            If($($? -eq $true)) {
-                Write-Verbose "$(Get-Date -Format g): Uninstall successful? $($?)."
-                Invoke-Expression $launchLog -ErrorAction SilentlyContinue
-                
+            Invoke-Expression $launchLog -ErrorAction SilentlyContinue
+
+            If($($returnValue.ExitCode -eq 0) -or $($returnValue.ExitCode -eq 3010)) {
+                Write-Verbose "$(Get-Date -Format g): Uninstall successful."
                 Write-Verbose "$(Get-Date -Format g): Uninstall: $($uninstall) has ended." 
-                Write-Verbose "$(Get-Date -Format g): Please verify exit in uninstall log."
+                Write-Verbose "$(Get-Date -Format g): Please verify executable exit in uninstall log."
 
                 #Stop the Service "ccmsetup" which is also a Process "ccmsetup.exe" if it wasn't stopped in the services after uninstall
                 if(!([string]::IsNullOrEmpty((Get-Service -Name ccmsetup -ErrorAction SilentlyContinue).Name))) {
@@ -52,31 +54,32 @@ FUNCTION Uninstall-CcmClient{
                 If(Test-Path "$($Env:WinDir)\CCMCache" -PathType Container) {Remove-Item -Path "$($Env:WinDir)\CCMCache" -Force -Recurse -Confirm:$false -Verbose}
 
                 #Remove registry keys associated with the SCCM Client that might not be removed by ccmclean.exe
-                Write-Verbose "$(Get-Date -Format g): Removing associated CCM registry keys."
-                If(Test-Path 'HKLM:\SOFTWARE\Microsoft\CCM') {Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\CCM' -Force -Recurse -Confirm:$false -Verbose}
-                If(Test-Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\CCM') {Remove-Item -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\CCM' -Force -Recurse -Confirm:$false -Verbose}
-                If(Test-Path 'HKLM:\SOFTWARE\Microsoft\SMS') {Remove-Item -Path 'HKLM:\SOFTWARE\Microsoft\SMS' -Force -Recurse -Verbose}
-                If(Test-Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\SMS') {Remove-Item -Path 'HKLM:\SOFTWARE\Wow6432Node\Microsoft\SMS' -Force -Recurse -Confirm:$false -Verbose}
-                If(Test-Path 'HKLM:\Software\Microsoft\CCMSetup') {Remove-Item -Path 'HKLM:\Software\Microsoft\CCMSetup' -Force -Recurse -Verbose}
-                If(Test-Path 'HKLM:\Software\Wow6432Node\Microsoft\CCMSetup') {Remove-Item -Path 'HKLM:\Software\Wow6432Node\Microsoft\CCMSetup' -Force -Recurse -Confirm:$false -Verbose}
+                Write-Verbose "$(Get-Date -Format g): Removing associated CCM registry keys if present"
+                Update-Registry('HKLM:\SOFTWARE\Microsoft\CCM')
+                Update-Registry('HKLM:\SOFTWARE\Wow6432Node\Microsoft\CCM')
+                Update-Registry('HKLM:\SOFTWARE\Microsoft\SMS')
+                Update-Registry('HKLM:\SOFTWARE\Wow6432Node\Microsoft\SMS')
+                Update-Registry('HKLM:\Software\Microsoft\CCMSetup')
+                Update-Registry('HKLM:\Software\Wow6432Node\Microsoft\CCMSetup')
 
                 #Remove the service from "Services"
                 Write-Verbose "$(Get-Date -Format g): Removing ccmexec and ccmsetup services if active."
-                If(Test-Path 'HKLM:\SOFTWARE\Microsoft\CCM') {Remove-Item -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\CcmExec' -Force -Recurse -Confirm:$false -Verbose}
-                If(Test-Path 'HKLM:\SOFTWARE\Microsoft\CCM') {Remove-Item -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\ccmsetup' -Force -Recurse -Confirm:$false -Verbose}
+                Update-Registry('HKLM:\SYSTEM\CurrentControlSet\Services\CcmExec')
+                Update-Registry('HKLM:\SYSTEM\CurrentControlSet\Services\ccmsetup')
 
                 #Remove the Namespaces from the WMI repository if present
-                Write-Verbose "$(Get-Date -Format g): Removing CCM WMi namspaceson local computer."
+                Write-Verbose "$(Get-Date -Format g): Removing CCM WMi namspaces on local computer."
                 If(Get-CimInstance -class "CCM" -Namespace "root" -ErrorAction SilentlyContinue) {Get-CimInstance -query "Select * From __Namespace Where Name='CCM'" -Namespace "root" | Remove-CimInstance -Verbose -Confirm:$false}
                 If(Get-CimInstance -class "CCMVDI" -Namespace "root" -ErrorAction SilentlyContinue) {Get-CimInstance -query "Select * From __Namespace Where Name='CCMVDI'" -Namespace "root" | Remove-CimInstance -Verbose -Confirm:$false}
                 If(Get-CimInstance -class "SmsDm" -Namespace "root" -ErrorAction SilentlyContinue) {Get-CimInstance -query "Select * From __Namespace Where Name='SmsDm'" -Namespace "root" | Remove-CimInstance -Verbose -Confirm:$false}
                 If(Get-CimInstance -class "sms" -Namespace "root\cimv2" -ErrorAction SilentlyContinue) {Get-CimInstance -query "Select * From __Namespace Where Name='sms'" -Namespace "root\cimv2" | Remove-CimInstance -Verbose -Confirm:$false}
 
-                If($RemoveAll) {
+                If($RemoveAll.IsPresent) {
                     #Delete the file with the certificate GUID and SMS GUID that current Client was registered with
-                    Remove-Item -Path "$($Env:WinDir)\smscfg.ini" -Force -Confirm:$false -Verbose
+                    Write-Verbose "$(Get-Date -Format g): Removing $($Env:WinDir)\smscfg.ini if present"
+                    If(Test-Path "$($Env:WinDir)\smscfg.ini" -PathType Leaf) {Remove-Item -Path "$($Env:WinDir)\smscfg.ini" -Force -Recurse -Confirm:$false -Verbose}
                     #Delete the certificate itself
-                    Remove-Item -Path 'HKLM:\Software\Microsoft\SystemCertificates\SMS\Certificates\*' -Force -Confirm:$false -Verbose
+                    Update-Registry('HKLM:\Software\Microsoft\SystemCertificates\SMS\Certificates\*')
                     #Add webservice call here
                 }
 
@@ -92,7 +95,7 @@ FUNCTION Uninstall-CcmClient{
                     Write-Verbose "$(Get-Date -Format g): NOMAD cachecleaner.exe process ended or 120 second timeout reached" 
                 }
             } Else {
-                Write-Verbose "Something unexpected with uninstall."
+                Write-Verbose "Something unexpected with the uninstall."
                 #Something went wrong with uninstall
             }
 
@@ -100,9 +103,8 @@ FUNCTION Uninstall-CcmClient{
             #error handling go here, $_ contains the error record
             Write-Verbose "$($_.Exception.Message)"
         }
-        Write-Verbose "$(Get-Date -Format g): Ending PROCESS block." 
-    }
-    END{}
+        Write-Verbose "$(Get-Date -Format g): Ending Uninstall-CcmClient function."
 }
 
-Uninstall-CcmClient -Verbose
+
+Uninstall-CcmClient -Verbose -RemoveAll
