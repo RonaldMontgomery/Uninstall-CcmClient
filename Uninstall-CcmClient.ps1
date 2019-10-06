@@ -1,8 +1,23 @@
 ﻿#Requires -RunAsAdministrator
 
 FUNCTION Update-Registry($path) {
+    Write-Verbose "$(Get-Date -Format g): Beginning Update-Registry function."
     If(Test-Path $path) {write-verbose "$(Get-Date -Format g): Deleting $($path)"; Remove-Item -Path $path -Force -Recurse -Confirm:$false -Verbose}
+    Write-Verbose "$(Get-Date -Format g): Ending Update-Registry function."
+}
+
+FUNCTION Clear-NomadCache{
+    Write-Verbose "$(Get-Date -Format g): Beginning Clear-NomadCache function."
+    If((Get-Command "cachecleaner.exe" -ErrorAction SilentlyContinue) -eq $null){
+        Write-Verbose "$(Get-Date -Format g): Unable to find NOMAD cachecleaner.exe in PATH statement"
+    } else {
+        Write-Verbose "$(Get-Date -Format g): Invoking NOMAD cachecleaner.exe"
+        Invoke-Expression "cachecleaner.exe --deleteall" -ErrorAction Stop
+        Wait-Process -Id (Get-Process -name "cachecleaner.exe").Id -Timeout 120
+        Write-Verbose "$(Get-Date -Format g): NOMAD cachecleaner.exe process ended or 120 second timeout reached" 
     }
+    Write-Verbose "$(Get-Date -Format g): Ending Clear-NomadCache function."    
+}
 
 
 #https://www.optimizationcore.com/deployment/sccm-client-complete-remove-uninstall-powershell-script/
@@ -15,10 +30,12 @@ FUNCTION Uninstall-CcmClient{
         Write-Verbose "$(Get-Date -Format g): Beginning Uninstall-CCMClient function."
         Try {
             If(Test-Path "$($env:windir)\ccmsetup\ccmsetup.exe" -PathType Leaf){
+                Write-Verbose "$(Get-Date -Format g): Located $($env:windir)\ccmsetup\ccmsetup.exe." 
                 $uninstall = "$($env:windir)\ccmsetup\ccmsetup.exe" 
                 $switches = "/uninstall"
                 $launchLog = "& `"$($PSScriptRoot)\cmtrace.exe`" `"$($env:windir)\ccmsetup\logs\ccmsetup.log`""
-            } ElseIf(Test-path "$($PSScriptRoot)\ccmclean.exe" -PathType Leaf) {  
+            } ElseIf(Test-path "$($PSScriptRoot)\ccmclean.exe" -PathType Leaf) {
+                Write-Verbose "$(Get-Date -Format g): Located $($PSScriptRoot)\ccmclean.exe."   
                 $uninstall = "$($PSScriptRoot)\ccmclean.exe"
                 $switches =  "/logdir:`"$($env:windir)\temp`" /removehistory /q"
                 $launchLog = "& `"$($PSScriptRoot)\cmtrace.exe`" `"$($env:windir)\temp\ccmclean.log`""
@@ -26,6 +43,7 @@ FUNCTION Uninstall-CcmClient{
                 #handle no removal code present
                 Write-Verbose "$(Get-Date -Format g): Unable to locate neither $($env:windir)\ccmsetup\ccmsetup.exe nor $($PSScriptRoot)\ccmclean.exe." 
                 Write-Verbose "$(Get-Date -Format g): Unable to uninstall CCM client. Script exiting."
+                Return 1
             }
 
             Write-Verbose "Running $returnValue = Start-Process -FilePath $($uninstall) -ArgumentList $($switches)  -NoNewWindow -Wait -Passthru"
@@ -37,9 +55,9 @@ FUNCTION Uninstall-CcmClient{
             If($($returnValue.ExitCode -eq 0) -or $($returnValue.ExitCode -eq 3010)) {
                 Write-Verbose "$(Get-Date -Format g): Uninstall successful."
                 Write-Verbose "$(Get-Date -Format g): Uninstall: $($uninstall) has ended." 
-                Write-Verbose "$(Get-Date -Format g): Please verify executable exit in uninstall log."
+                Write-Verbose "$(Get-Date -Format g): Please verify executable exit code in uninstall log."
 
-                #Stop the Service "ccmsetup" which is also a Process "ccmsetup.exe" if it wasn't stopped in the services after uninstall
+                #Stop the ccmsetup service if it wasn't stopped in the services after uninstall
                 if(!([string]::IsNullOrEmpty((Get-Service -Name ccmsetup -ErrorAction SilentlyContinue).Name))) {
                     Write-Verbose "$(Get-Date -Format g): Killing unexpected ccmsetup process."
                     Get-Service -Name ccmsetup -ErrorAction SilentlyContinue | Stop-Service -Force -Verbose
@@ -83,28 +101,66 @@ FUNCTION Uninstall-CcmClient{
                     #Add webservice call here
                 }
 
-                #Add Teams Webhook function here
 
-                #NOMAD cache clean
-                If((Get-Command "cachecleaner.exe" -ErrorAction SilentlyContinue) -eq $null){
-                    Write-Verbose "$(Get-Date -Format g): Unable to find NOMAD cachecleaner.exe in PATH statement"
-                } else {
-                    Write-Verbose "$(Get-Date -Format g): Invoking NOMAD cachecleaner.exe"
-                    Invoke-Expression "cachecleaner.exe --deleteall" -ErrorAction Stop
-                    Wait-Process -Id (Get-Process -name "cachecleaner.exe").Id -Timeout 120
-                    Write-Verbose "$(Get-Date -Format g): NOMAD cachecleaner.exe process ended or 120 second timeout reached" 
-                }
+                Clear-NomadCache
+
             } Else {
-                Write-Verbose "Something unexpected with the uninstall."
                 #Something went wrong with uninstall
+                Write-Verbose "Something unexpected happened with the uninstall. Exit code = $($returnValue.ExitCode)"
             }
 
         } Catch {
-            #error handling go here, $_ contains the error record
+            #error handling
             Write-Verbose "$($_.Exception.Message)"
         }
         Write-Verbose "$(Get-Date -Format g): Ending Uninstall-CcmClient function."
 }
 
 
+FUNCTION Install-CcmClient{
+
+        Write-Verbose "$(Get-Date -Format g): Beginning Install-CCMClient function."
+        Try {
+            If(Test-Path "$($PSScriptRoot)\ccmsetup\ccmsetup.exe" -PathType Leaf){
+                Write-Verbose "$(Get-Date -Format g): Located $($PSScriptRoot)\ccmsetup\ccmsetup.exe."
+                $install = "$($PSScriptRoot)\ccmsetup\ccmsetup.exe" 
+                $switches = "/uninstall"
+                $launchLog = "& `"$($PSScriptRoot)\cmtrace.exe`" `"$($env:windir)\ccmsetup\logs\ccmsetup.log`""
+            } Else {
+                #handle no install code present
+                Write-Verbose "$(Get-Date -Format g): Unable to locate$($PSScriptRoot)\ccmsetup\ccmsetup.exe." 
+                Write-Verbose "$(Get-Date -Format g): Unable to install CCM client. Script exiting."
+                Return 1
+            }
+
+            Write-Verbose "Running $returnValue = Start-Process -FilePath $($install) -ArgumentList $($switches)  -NoNewWindow -Wait -Passthru"
+            $returnValue = Start-Process -FilePath $install -ArgumentList $switches  -NoNewWindow -Wait -Passthru
+
+            Invoke-Expression $launchLog -ErrorAction SilentlyContinu
+
+            $logReader = Start-Job -ScriptBlock {Get-content $($env:windir)\ccmsetup\logs\ccmsetup.log -Tail 0 -Wait | where { $_ -match "!!!!STRING HERE!!!" }}
+
+            $stopWatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+            Do{
+            $results= receive-job $logReader.Name -keep
+            Start-Sleep -Seconds 1
+            }
+            until((-not ([string]::IsNullOrEmpty($results))) -or ($stopWatch.elapsed.TotalSeconds -gt 30))
+
+            Remove-Job $logReader.Name -Force
+
+            Write-Verbose "$(Get-Date -Format g): $results."
+
+        } Catch {
+            #error handling
+            Write-Verbose "$($_.Exception.Message)"
+        }
+        Write-Verbose "$(Get-Date -Format g): Ending Install-CcmClient function."
+}
+
+
+
 Uninstall-CcmClient -Verbose -RemoveAll
+
+Install-CcmClient -Verbose
